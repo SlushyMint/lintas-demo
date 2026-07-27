@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>LINTAS — Closed-Loop Bench Demo</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;padding:16px;
+       background:#F4F6F8;color:#1F3B57;-webkit-tap-highlight-color:transparent}
+  h1{font-size:19px;margin:0 0 2px;letter-spacing:-.2px}
+  .sub{font-size:12px;color:#5B7286;margin-bottom:14px}
+  .card{background:#fff;border-radius:10px;padding:14px;margin-bottom:12px;
+        box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .lbl{font-size:12px;font-weight:600;color:#5B7286;text-transform:uppercase;
+       letter-spacing:.4px;margin-bottom:8px}
+  button{font-size:15px;padding:12px 16px;border:0;border-radius:8px;
+         background:#1F3B57;color:#fff;width:100%;font-weight:600}
+  button:active{opacity:.85}
+  button.ghost{background:#E4EAF0;color:#1F3B57;font-weight:500;font-size:13px;padding:10px}
+  select{font-size:15px;padding:10px;width:100%;border:1px solid #C9D4DE;
+         border-radius:8px;background:#fff;color:#1F3B57}
+  .row{display:flex;justify-content:space-between;align-items:center;
+       padding:8px 0;border-bottom:1px solid #EDF1F4;font-size:14px}
+  .row:last-child{border-bottom:0}
+  .uid{font-size:10.5px;color:#8296A6;font-family:ui-monospace,monospace}
+  #out{font-size:16px;font-weight:600;text-align:center;padding:14px;
+       border-radius:8px;margin-top:10px;line-height:1.4}
+  .ok{background:#DCEBDD;color:#1E5B2A}
+  .no{background:#F6DEDB;color:#8E2C20}
+  .info{background:#E4EAF0;color:#1F3B57}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  th{text-align:left;color:#8296A6;font-weight:600;padding:4px}
+  td{padding:5px 4px;border-top:1px solid #EDF1F4}
+  .cnt{font-size:26px;font-weight:700;text-align:center;margin:2px 0}
+  .cnt small{font-size:12px;font-weight:500;color:#8296A6;display:block}
+  #dbg{display:none}
+</style>
+</head>
+<body>
+
+<h1>LINTAS</h1>
+<div class="sub">Closed-Loop Bench Demo · Phase 1 · Idako Consulting</div>
+
+<div class="card">
+  <div class="lbl">Titik Layanan</div>
+  <select id="mode">
+    <option value="ACCESS">Titik Akses — verifikasi masuk</option>
+    <option value="MERCHANT">Terminal Merchant — potong Rp5.000</option>
+  </select>
+  <div style="height:10px"></div>
+  <button id="scan">Mulai Baca NFC</button>
+  <div id="out" class="info" style="display:none"></div>
+</div>
+
+<div class="card" id="dbg">
+  <div class="lbl">Mode Uji (tanpa NFC)</div>
+  <button class="ghost" onclick="LINTAS.handle('04:A1:B2:C3:D4:E5:F6')">Simulasi Gelang A</button>
+  <div style="height:6px"></div>
+  <button class="ghost" onclick="LINTAS.handle('04:99:88:77:66:55:44')">Simulasi Gelang B</button>
+  <div style="height:6px"></div>
+  <button class="ghost" onclick="LINTAS.handle('04:00:00:00:00:00:00')">Simulasi Gelang Asing</button>
+</div>
+
+<div class="card">
+  <div class="lbl">Total Tap Tercatat</div>
+  <div class="cnt" id="counter">0<small>target 30 untuk pengukuran</small></div>
+</div>
+
+<div class="card">
+  <div class="lbl">Saldo Peserta</div>
+  <div id="balances"></div>
+</div>
+
+<div class="card">
+  <div class="lbl">Log Transaksi</div>
+  <table>
+    <thead><tr><th>Waktu</th><th>UID</th><th>Nama</th><th>Status</th><th>Saldo</th><th>ms</th></tr></thead>
+    <tbody id="log"></tbody>
+  </table>
+  <div style="height:10px"></div>
+  <button class="ghost" id="csv">Unduh CSV</button>
+  <div style="height:6px"></div>
+  <button class="ghost" id="reset">Reset Data</button>
+</div>
+
+<script>
+var LINTAS = {
+  FARE: 5000,
+  SEED: [{ nama: 'Peserta A', saldo: 50000 }, { nama: 'Peserta B', saldo: 25000 }],
+  db: [], log: [],
+
+  load: function () {
+    try {
+      this.db  = JSON.parse(localStorage.getItem('lintas_db')  || '[]');
+      this.log = JSON.parse(localStorage.getItem('lintas_log') || '[]');
+    } catch (e) { this.db = []; this.log = []; }
+  },
+
+  save: function () {
+    try {
+      localStorage.setItem('lintas_db',  JSON.stringify(this.db));
+      localStorage.setItem('lintas_log', JSON.stringify(this.log));
+    } catch (e) {}
+  },
+
+  // inti logika closed-loop
+  process: function (uid, mode) {
+    var p = null, i;
+    for (i = 0; i < this.db.length; i++) if (this.db[i].uid === uid) p = this.db[i];
+
+    if (!p) {
+      if (this.db.length >= this.SEED.length) {
+        return { status: 'DITOLAK · TIDAK TERDAFTAR', saldo: null, nama: '-' };
+      }
+      var s = this.SEED[this.db.length];
+      p = { uid: uid, nama: s.nama, saldo: s.saldo };
+      this.db.push(p);
+      return { status: 'TERDAFTAR', saldo: p.saldo, nama: p.nama };
+    }
+    if (mode === 'ACCESS') {
+      return { status: 'AKSES DIIZINKAN', saldo: p.saldo, nama: p.nama };
+    }
+    if (p.saldo < this.FARE) {
+      return { status: 'DITOLAK · SALDO KURANG', saldo: p.saldo, nama: p.nama };
+    }
+    p.saldo -= this.FARE;
+    return { status: 'TRANSAKSI SUKSES', saldo: p.saldo, nama: p.nama };
+  },
+
+  handle: function (uid) {
+    var t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    var mode = (typeof document !== 'undefined' && document.getElementById('mode'))
+               ? document.getElementById('mode').value : 'MERCHANT';
+    var r = this.process(uid, mode);
+    var ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
+
+    this.log.push({
+      jam: new Date().toLocaleTimeString('id-ID'),
+      uid: uid, nama: r.nama, status: r.status, saldo: r.saldo, ms: ms, mode: mode
+    });
+    this.save();
+    if (typeof document !== 'undefined') {
+      this.render();
+      this.show(r.status + (r.saldo !== null ? ' — Rp' + r.saldo.toLocaleString('id-ID') : ''),
+                r.status.indexOf('DITOLAK') === 0 ? 'no' : 'ok');
+      if (navigator.vibrate) navigator.vibrate(r.status.indexOf('DITOLAK') === 0 ? [70, 50, 70] : 110);
+    }
+    return r;
+  },
+
+  toCSV: function () {
+    var rows = [['no', 'jam', 'uid', 'nama', 'status', 'saldo', 'ms', 'mode']];
+    for (var i = 0; i < this.log.length; i++) {
+      var r = this.log[i];
+      rows.push([i + 1, r.jam, r.uid, r.nama, r.status, r.saldo, r.ms, r.mode]);
+    }
+    return rows.map(function (r) { return r.join(','); }).join('\n');
+  },
+
+  show: function (msg, cls) {
+    var o = document.getElementById('out');
+    o.style.display = 'block';
+    o.className = cls;
+    o.textContent = msg;
+  },
+
+  render: function () {
+    var b = document.getElementById('balances');
+    b.innerHTML = this.db.length
+      ? this.db.map(function (p) {
+          return '<div class="row"><span>' + p.nama +
+                 '<br><span class="uid">' + p.uid + '</span></span>' +
+                 '<b>Rp' + p.saldo.toLocaleString('id-ID') + '</b></div>';
+        }).join('')
+      : '<div style="font-size:13px;color:#8296A6;padding:6px 0">Belum ada peserta. Tap gelang pertama untuk mendaftar.</div>';
+
+    document.getElementById('log').innerHTML = this.log.slice(-12).reverse().map(function (r) {
+      return '<tr><td>' + r.jam + '</td><td class="uid">' + r.uid.slice(0, 8) + '…</td><td>' +
+             r.nama + '</td><td>' + r.status + '</td><td>' +
+             (r.saldo === null ? '-' : 'Rp' + r.saldo.toLocaleString('id-ID')) +
+             '</td><td>' + r.ms + '</td></tr>';
+    }).join('');
+
+    document.getElementById('counter').innerHTML =
+      this.log.length + '<small>target 30 untuk pengukuran</small>';
+  }
+};
+
+if (typeof document !== 'undefined') {
+  LINTAS.load();
+  LINTAS.render();
+
+  if (location.search.indexOf('debug') > -1) document.getElementById('dbg').style.display = 'block';
+
+  document.getElementById('scan').onclick = async function () {
+    if (!('NDEFReader' in window)) {
+      LINTAS.show('Browser ini tidak mendukung Web NFC. Gunakan Chrome di Android. Tambahkan ?debug=1 pada URL untuk mode uji tanpa NFC.', 'no');
+      return;
+    }
+    try {
+      var reader = new NDEFReader();
+      await reader.scan();
+      LINTAS.show('Siap. Tempelkan gelang ke bagian belakang HP.', 'info');
+      reader.onreading = function (e) { LINTAS.handle(e.serialNumber); };
+      reader.onreadingerror = function () { LINTAS.show('Gagal membaca tag. Coba lagi.', 'no'); };
+    } catch (err) {
+      LINTAS.show('NFC tidak aktif atau izin ditolak. ' + err, 'no');
+    }
+  };
+
+  document.getElementById('csv').onclick = function () {
+    var blob = new Blob([LINTAS.toCSV()], { type: 'text/csv' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'lintas_bench_log.csv';
+    a.click();
+  };
+
+  document.getElementById('reset').onclick = function () {
+    if (confirm('Hapus semua data peserta dan log?')) {
+      LINTAS.db = []; LINTAS.log = []; LINTAS.save(); LINTAS.render();
+      document.getElementById('out').style.display = 'none';
+    }
+  };
+}
+
+if (typeof module !== 'undefined') module.exports = LINTAS;
+</script>
+</body>
+</html>
