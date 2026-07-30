@@ -60,6 +60,13 @@
   <button class="ghost" onclick="LINTAS.handle('04:99:88:77:66:55:44')">Simulasi Gelang B</button>
   <div style="height:6px"></div>
   <button class="ghost" onclick="LINTAS.handle('04:00:00:00:00:00:00')">Simulasi Gelang Asing</button>
+  <div style="height:14px"></div>
+  <div class="lbl">Diagnostik</div>
+  <pre id="diag" style="font-size:10.5px;line-height:1.55;white-space:pre-wrap;
+       background:#F4F6F8;padding:10px;border-radius:6px;margin:0;
+       font-family:ui-monospace,monospace;color:#33556F"></pre>
+  <div style="height:8px"></div>
+  <button class="ghost" id="rediag">Jalankan Ulang Diagnostik</button>
 </div>
 
 <div class="card">
@@ -87,8 +94,9 @@
 <script>
 var LINTAS = {
   FARE: 5000,
+  REARM_MS: 900,
   SEED: [{ nama: 'Peserta A', saldo: 50000 }, { nama: 'Peserta B', saldo: 25000 }],
-  db: [], log: [],
+  db: [], log: [], lastSeenByUid: {}, scannerActive: false,
 
   load: function () {
     try {
@@ -132,6 +140,18 @@ var LINTAS = {
     var t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     var mode = (typeof document !== 'undefined' && document.getElementById('mode'))
                ? document.getElementById('mode').value : 'MERCHANT';
+    var now = Date.now();
+    var lastSeen = this.lastSeenByUid[uid] || 0;
+    this.lastSeenByUid[uid] = now;
+
+    if (now - lastSeen < this.REARM_MS) {
+      if (typeof document !== 'undefined') {
+        this.show('TAP GANDA DIABAIKAN · Jauhkan gelang, lalu coba kembali.', 'info');
+        if (navigator.vibrate) navigator.vibrate(30);
+      }
+      return { status: 'TAP GANDA DIABAIKAN', saldo: null, nama: '-' };
+    }
+
     var r = this.process(uid, mode);
     var ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
 
@@ -193,21 +213,65 @@ if (typeof document !== 'undefined') {
 
   if (location.search.indexOf('debug') > -1) document.getElementById('dbg').style.display = 'block';
 
+  // ---- diagnostik ----
+  var dlog = [];
+  function dpush(s) {
+    dlog.push(new Date().toLocaleTimeString('id-ID') + '  ' + s);
+    var el = document.getElementById('diag');
+    if (el) el.textContent = dlog.join('\n');
+  }
+  async function runDiag() {
+    dlog = [];
+    dpush('NDEFReader tersedia : ' + ('NDEFReader' in window));
+    dpush('HTTPS / secure      : ' + window.isSecureContext);
+    dpush('Protokol            : ' + location.protocol);
+    try {
+      var p = await navigator.permissions.query({ name: 'nfc' });
+      dpush('Izin NFC            : ' + p.state);
+    } catch (e) {
+      dpush('Izin NFC            : tidak bisa dicek (' + e.name + ')');
+    }
+    var ua = navigator.userAgent;
+    dpush('Chrome              : ' + (/Chrome\/(\d+)/.test(ua) ? RegExp.$1 : 'tidak terdeteksi'));
+    dpush('Samsung Internet    : ' + (/SamsungBrowser/.test(ua) ? 'ya' : 'tidak'));
+    dpush('Android             : ' + (/Android/.test(ua) ? 'ya' : 'TIDAK — Web NFC hanya Android'));
+    dpush('--- tekan Mulai Baca NFC, lalu tempelkan kartu ---');
+  }
+  document.getElementById('rediag').onclick = runDiag;
+
   document.getElementById('scan').onclick = async function () {
+    if (LINTAS.scannerActive) {
+      LINTAS.show('Pemindaian sudah aktif. Tempelkan gelang ke bagian belakang HP.', 'info');
+      return;
+    }
     if (!('NDEFReader' in window)) {
+      dpush('GAGAL: NDEFReader tidak ada di browser ini');
       LINTAS.show('Browser ini tidak mendukung Web NFC. Gunakan Chrome di Android. Tambahkan ?debug=1 pada URL untuk mode uji tanpa NFC.', 'no');
       return;
     }
     try {
       var reader = new NDEFReader();
+      dpush('memanggil scan()...');
       await reader.scan();
+      LINTAS.scannerActive = true;
+      dpush('scan() BERHASIL — pemindaian aktif');
       LINTAS.show('Siap. Tempelkan gelang ke bagian belakang HP.', 'info');
-      reader.onreading = function (e) { LINTAS.handle(e.serialNumber); };
-      reader.onreadingerror = function () { LINTAS.show('Gagal membaca tag. Coba lagi.', 'no'); };
+      reader.onreading = function (e) {
+        dpush('READING: serialNumber = ' + (e.serialNumber || '(kosong)') +
+              ' | records = ' + (e.message && e.message.records ? e.message.records.length : 0));
+        LINTAS.handle(e.serialNumber || 'UID-KOSONG');
+      };
+      reader.onreadingerror = function () {
+        dpush('READINGERROR: tag terdeteksi tapi TIDAK terbaca — kemungkinan besar bukan format NDEF');
+        LINTAS.show('Tag terdeteksi tapi tidak terbaca. Kemungkinan bukan format NDEF. Gunakan tag NTAG213.', 'no');
+      };
     } catch (err) {
-      LINTAS.show('NFC tidak aktif atau izin ditolak. ' + err, 'no');
+      dpush('scan() GAGAL: ' + err.name + ' — ' + err.message);
+      LINTAS.show('NFC tidak aktif atau izin ditolak. ' + err.name + ': ' + err.message, 'no');
     }
   };
+
+  if (location.search.indexOf('debug') > -1) runDiag();
 
   document.getElementById('csv').onclick = function () {
     var blob = new Blob([LINTAS.toCSV()], { type: 'text/csv' });
